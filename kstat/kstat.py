@@ -1,16 +1,16 @@
 
 import ctypes as C
 
-from operator import attrgetter
+from operator import attrgetter, itemgetter
 
 try:
     from collections import Iterator, Iterable
 except ImportError:
     from collections.abc import Iterator, Iterable
 
-import libkstat
+from . import libkstat
 
-KSTAT_UNMARSHALL = {
+KSTAT_NAMED_UNMARSHALL = {
     libkstat.KSTAT_DATA_CHAR: attrgetter('c'),
     libkstat.KSTAT_DATA_INT32: attrgetter('i32'),
     libkstat.KSTAT_DATA_UINT32: attrgetter('ui32'),
@@ -47,44 +47,40 @@ class KStatIterator(Iterator):
 class KStatEntry(dict):
     def __init__(self, kstat, entry):
         self.kstat = kstat
-        self.entry = entry
-        self.INIT_TYPE[entry.ks_type](self, entry)
+        self._entry = entry
+        self.__INIT_TYPE[entry.ks_type](self, entry)
 
-    def __init_raw(self, ks):
-        # TODO
-        pass
-
-    def __init_named(self, entry):
-        data = C.cast(entry.ks_data, C.POINTER(libkstat.kstat_named))
+    def _from_struct_fields(self, entry, struct_type):
+        fields = map(itemgetter(0), struct_type._fields_)
+        data = C.cast(entry.ks_data, C.POINTER(struct_type))
         for i in range(entry.ks_ndata):
             d = data[i]
-            self[d.name] = KSTAT_UNMARSHALL[d.data_type](d.value);
+            for field_name in fields:
+                self[field_name] = getattr(d, field_name)
+
+    def __init_raw(self, entry):
+        values = []
+        for i in range(entry.ks_ndata):
+            d = C.cast(entry.ks_data, C.c_char_p)
+            values.append(d.value)
+        self['values'] = values
+
+    def __init_named(self, entry):
+        data = C.cast(entry.ks_data, libkstat.kstat_named_p)
+        for i in range(entry.ks_ndata):
+            d = data[i]
+            self[d.name] = KSTAT_NAMED_UNMARSHALL[d.data_type](d.value);
 
     def __init_intr(self, entry):
-        # TODO
-        pass
+        self._from_struct_fields(entry, libkstat.kstat_intr)
 
     def __init_io(self, entry):
-        # TODO
-        pass
+        self._from_struct_fields(entry, libkstat.kstat_io)
 
     def __init_timer(self, entry):
-        # TODO
-        pass
+        self._from_struct_fields(entry, libkstat.kstat_timer)
 
-    @property
-    def module(self):
-        return self.entry.ks_module
-
-    @property
-    def instance(self):
-        return self.entry.ks_instance
-
-    @property
-    def name(self):
-        return self.entry.ks_name
-
-    INIT_TYPE = {
+    __INIT_TYPE = {
         libkstat.KSTAT_TYPE_RAW: __init_raw,
         libkstat.KSTAT_TYPE_NAMED: __init_named,
         libkstat.KSTAT_TYPE_INTR: __init_intr,
@@ -92,13 +88,37 @@ class KStatEntry(dict):
         libkstat.KSTAT_TYPE_TIMER: __init_timer
     }
 
+    @property
+    def module(self):
+        return self._entry.ks_module
+
+    @property
+    def instance(self):
+        return self._entry.ks_instance
+
+    @property
+    def name(self):
+        return self._entry.ks_name
+
+    @property
+    def class_name(self):
+        return self._entry.ks_class
+
+    @property
+    def crtime(self):
+        return self._entry.ks_crtime
+
+    @property
+    def snaptime(self):
+        return self._entry.ks_snaptime
+
 
 class KStat(Iterable):
     def __init__(self, module=None, instance=None, name=None):
         self._context = libkstat.kstat_open()
-        self.module = bytes(module, 'ascii') if module else None
+        self.module = module.encode('ascii', 'ignore') if module else None
         self.instance = int(instance) if instance else None
-        self.name = bytes(name, 'ascii') if name else None
+        self.name = name.encode('ascii', 'ignore') if name else None
 
     def __del__(self):
         libkstat.kstat_close(self._context)
@@ -110,9 +130,9 @@ class KStat(Iterable):
     def __getitem__(self, key):
         module, instance, name = key
         if not isinstance(module, bytes):
-            module = bytes(module, 'ascii', 'ignore')
+            module = module.encode('ascii', 'ignore')
         if not isinstance(name, bytes):
-            name = bytes(name, 'ascii', 'ignore')
+            name = name.encode('ascii', 'ignore')
         ksp = libkstat.kstat_lookup(self._context, module, instance, name)
         if ksp is None:
             raise KeyError(key)
@@ -127,11 +147,12 @@ class KStat(Iterable):
 def main():
     import pprint as pp
     k = KStat()
-    pp.pprint(k)
-    pp.pprint(k['sd', 30, 'sd30'])
-    pp.pprint(k['zfs', 0, 'zfetchstats'])
+#    pp.pprint(k)
+#    pp.pprint(k['sd', 30, 'sd30'])
+#    pp.pprint(k['zfs', 0, 'zfetchstats'])
+    pp.pprint(k['unix', 0, 'system_pages'])
     k = KStat('link')
-    pp.pprint([((k.module, k.instance, k.name), k) for k in list(k)])
+#    pp.pprint([((k.module, k.instance, k.name), k) for k in list(k)])
 
 # TODO: delete this
 if __name__ == '__main__':
