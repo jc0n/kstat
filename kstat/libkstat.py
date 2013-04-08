@@ -20,9 +20,12 @@ KSTAT_TYPE_IO = 3
 KSTAT_TYPE_TIMER = 4
 
 kstat_type_names = {
-    KSTAT_TYPE_RAW: 'raw', KSTAT_TYPE_NAMED: 'named',
-    KSTAT_TYPE_INTR: 'intr', KSTAT_TYPE_IO: 'io', KSTAT_TYPE_TIMER: 'timer'
-    }
+    KSTAT_TYPE_RAW: 'raw',
+    KSTAT_TYPE_NAMED: 'named',
+    KSTAT_TYPE_INTR: 'intr',
+    KSTAT_TYPE_IO: 'io',
+    KSTAT_TYPE_TIMER: 'timer'
+}
 
 KSTAT_STRLEN = 31
 
@@ -140,10 +143,11 @@ class str_struct(C.Structure):
 class value_union(C.Union):
     _fields_ = [
         ('c', C.c_char * 16),
-	('i32', C.c_int32),
-	('ui32', C.c_uint32),
-	('i64', C.c_int64),
-	('ui64', C.c_uint64),
+        ('i32', C.c_int32),
+        ('ui32', C.c_uint32),
+        ('i64', C.c_int64),
+        ('ui64', C.c_uint64),
+        ('str', str_struct),
     ]
 
 

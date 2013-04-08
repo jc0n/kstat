@@ -1,108 +1,138 @@
-#
-# The contents of this file are subject to the terms of the
-# Common Development and Distribution License (the "License").
-# You may not use this file except in compliance with the License.
-#
-# See the License for the specific language governing permissions
-# and limitations under the License.
-#
-#
-# Copyright 2011 Grigale Ltd. All rigths reserved.
-# Use is sujbect to license terms.
-#
 
 import ctypes as C
+
+from operator import attrgetter
+
+try:
+    from collections import Iterator, Iterable
+except ImportError:
+    from collections.abc import Iterator, Iterable
+
 import libkstat
 
+KSTAT_UNMARSHALL = {
+    libkstat.KSTAT_DATA_CHAR: attrgetter('c'),
+    libkstat.KSTAT_DATA_INT32: attrgetter('i32'),
+    libkstat.KSTAT_DATA_UINT32: attrgetter('ui32'),
+    libkstat.KSTAT_DATA_INT64: attrgetter('i64'),
+    libkstat.KSTAT_DATA_UINT64: attrgetter('ui64'),
+    libkstat.KSTAT_DATA_STRING: attrgetter('str.addr.ptr', 'str.len'),
+}
 
-class Kstat():
-    def __init__(self, module='', instance=-1, name=''):
-        self._ctl = libkstat.kstat_open()
-        self._module = module
-        self._inst = instance
-        self._name = name
+_MODULE__INSTANCE__NAME = attrgetter('ks_module', 'ks_instance', 'ks_name')
 
-    def __del__(self):
-        libkstat.kstat_close(self._ctl)
+class KStatIterator(Iterator):
+    def __init__(self, kstat):
+        self.kstat = kstat
+        self._ksp = kstat._context.contents.kc_chain
 
-    def __str__(self):
-        s = 'Module: {0}, instance: {1}, name: {2}'.format(self._module, self._inst, self._name) 
-        return s
+    def __iter__(self):
+        return KStatIterator(self._kstat)
 
-    def __repr__(self):
-        s = 'Kstat("{0}", {1}, "{2}")'.format(self._module, self._inst, self._name) 
-        return s
+    def next(self):
+        while True:
+            if not self._ksp:
+                raise StopIteration
+            ks = self._ksp.contents
+            self._ksp = ks.ks_next
+            module, instance, name = module__instance__name = _MODULE__INSTANCE__NAME(ks)
+            if ((self.kstat.module is None or self.kstat.module == module) and
+                (self.kstat.instance is None or self.kstat.instance == instance) and
+                (self.kstat.name is None or self.kstat.name == name)):
+                return self.kstat[module__instance__name]
 
-    def lookup(self):
-        libkstat.kstat_lookup(self._ctl, self._module, self._inst, self._name)
-
-    def __getitem__(self, triplet):
-        module, instance, name = triplet
-        ksp = libkstat.kstat_lookup(self._ctl, module, instance, name)
-        if not ksp:
-            raise KeyError(triplet)
-        libkstat.kstat_read(self._ctl, ksp, None)
-        ks = ksp.contents
-        if ks.ks_type == libkstat.KSTAT_TYPE_RAW:
-            pass
-        elif ks.ks_type == libkstat.KSTAT_TYPE_NAMED:
-            value = dict()
-            print ks.ks_data
-            datap = C.cast(ks.ks_data, C.POINTER(libkstat.kstat_named))
-            for i in range(ks.ks_ndata):
-                if datap[i].data_type == libkstat.KSTAT_DATA_CHAR:
-                    value[datap[i].name] = datap[i].value.c
-                elif datap[i].data_type == libkstat.KSTAT_DATA_INT32:
-                    value[datap[i].name] = datap[i].value.i32
-                elif datap[i].data_type == libkstat.KSTAT_DATA_UINT32:
-                    value[datap[i].name] = datap[i].value.ui32
-                elif datap[i].data_type == libkstat.KSTAT_DATA_INT64:
-                    value[datap[i].name] = datap[i].value.i64
-                elif datap[i].data_type == libkstat.KSTAT_DATA_UINT64:
-                    value[datap[i].name] = datap[i].value.ui64
-                #print datap.contents
-                #print dir(datap[i].value)
-                #value[datap[i].name] = 0
-        elif ks.ks_type == libkstat.KSTAT_TYPE_INTR:
-            pass
-        elif ks.ks_type == libkstat.KSTAT_TYPE_IO:
-            pass
-        elif ks.ks_type == libkstat.KSTAT_TYPE_TIMER:
-            pass
-        else:
-            pass
-
-        return value
-
-    def dump(self):
-        kc = self._ctl.contents
-        ksp = kc.kc_chain
-        while ksp:
-            ks = ksp.contents
-            print ks.ks_module, ks.ks_instance, ks.ks_name, libkstat.kstat_type_names[ks.ks_type], ks.ks_class, ks.ks_ndata, ks.ks_data_size
-            ksp = ks.ks_next
-        pass 
+    __next__ = next
 
 
-class KstatValue():
-    pass
+class KStatEntry(dict):
+    def __init__(self, kstat, entry):
+        self.kstat = kstat
+        self.entry = entry
+        self.INIT_TYPE[entry.ks_type](self, entry)
 
-
-class NamedKstat(KstatValue):
-    def __init__(self):
+    def __init_raw(self, ks):
+        # TODO
         pass
 
+    def __init_named(self, entry):
+        data = C.cast(entry.ks_data, C.POINTER(libkstat.kstat_named))
+        for i in range(entry.ks_ndata):
+            d = data[i]
+            self[d.name] = KSTAT_UNMARSHALL[d.data_type](d.value);
 
+    def __init_intr(self, entry):
+        # TODO
+        pass
+
+    def __init_io(self, entry):
+        # TODO
+        pass
+
+    def __init_timer(self, entry):
+        # TODO
+        pass
+
+    @property
+    def module(self):
+        return self.entry.ks_module
+
+    @property
+    def instance(self):
+        return self.entry.ks_instance
+
+    @property
+    def name(self):
+        return self.entry.ks_name
+
+    INIT_TYPE = {
+        libkstat.KSTAT_TYPE_RAW: __init_raw,
+        libkstat.KSTAT_TYPE_NAMED: __init_named,
+        libkstat.KSTAT_TYPE_INTR: __init_intr,
+        libkstat.KSTAT_TYPE_IO: __init_io,
+        libkstat.KSTAT_TYPE_TIMER: __init_timer
+    }
+
+
+class KStat(Iterable):
+    def __init__(self, module=None, instance=None, name=None):
+        self._context = libkstat.kstat_open()
+        self.module = bytes(module, 'ascii') if module else None
+        self.instance = int(instance) if instance else None
+        self.name = bytes(name, 'ascii') if name else None
+
+    def __del__(self):
+        libkstat.kstat_close(self._context)
+
+    def __repr__(self):
+        args = (type(self).__name__, self.module, self.instance, self.name)
+        return '%s(%r, %r, %r)' % args
+
+    def __getitem__(self, key):
+        module, instance, name = key
+        if not isinstance(module, bytes):
+            module = bytes(module, 'ascii', 'ignore')
+        if not isinstance(name, bytes):
+            name = bytes(name, 'ascii', 'ignore')
+        ksp = libkstat.kstat_lookup(self._context, module, instance, name)
+        if ksp is None:
+            raise KeyError(key)
+        libkstat.kstat_read(self._context, ksp, None)
+        return KStatEntry(self, ksp.contents)
+
+    def __iter__(self):
+        return KStatIterator(self)
+
+
+# TODO: delete this
 def main():
     import pprint as pp
-    k = Kstat()
+    k = KStat()
     pp.pprint(k)
-    #k.dump()
-    pp.pprint(k['unix', 0, 'kstat_types'])
-    #pp.pprint(k['unix', 0, 'zio_data_buf2560'])
-    pp.pprint(k['audiohd', 0, 'engine_0'])
-    #k.lookup()
+    pp.pprint(k['sd', 30, 'sd30'])
+    pp.pprint(k['zfs', 0, 'zfetchstats'])
+    k = KStat('link')
+    pp.pprint([((k.module, k.instance, k.name), k) for k in list(k)])
 
-
+# TODO: delete this
 if __name__ == '__main__':
     main()
